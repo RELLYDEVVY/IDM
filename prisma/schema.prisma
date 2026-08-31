@@ -1,0 +1,240 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["iam"]
+}
+
+// ─── USER & IDENTITY ─────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  name                String
+  passwordHash        String
+  emailVerified       Boolean   @default(false)
+  emailVerifyToken    String?
+  passwordResetToken  String?
+  passwordResetExpiry DateTime?
+  status              String    @default("ACTIVE") // ACTIVE | SUSPENDED | DEACTIVATED
+  mustChangePassword  Boolean   @default(false)
+  passwordChangedAt   DateTime  @default(now())
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  roles            UserRole[]
+  sessions         Session[]
+  auditLogs        AuditLog[]
+  mfaSecret        MfaSecret?
+  passwordHistory  PasswordHistory[]
+  oauthApps        OAuthApp[]              @relation("AppCreator")
+  oauthTokens      OAuthToken[]
+  oauthCodes       OAuthAuthorizationCode[]
+
+  @@schema("iam")
+}
+
+// ─── RBAC: ROLES & PERMISSIONS ───────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique // SUPER_ADMIN | IAM_ADMIN | AUDITOR | USER
+  description String
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@schema("iam")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g. "user:create", "audit:read"
+  description String
+  resource    String   // e.g. "user", "audit", "settings", "oauth"
+  action      String   // e.g. "create", "read", "update", "delete"
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@schema("iam")
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@schema("iam")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@schema("iam")
+}
+
+// ─── SESSIONS ────────────────────────────────────────────────
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  ipAddress    String?
+  userAgent    String?
+  city         String?
+  country      String?
+  expiresAt    DateTime
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("iam")
+}
+
+// ─── MULTI-FACTOR AUTHENTICATION ─────────────────────────────
+
+model MfaSecret {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  secret      String
+  backupCodes String    // JSON array of hashed backup codes
+  enabled     Boolean   @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("iam")
+}
+
+// ─── AUDIT LOGGING ───────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  eventType   String   // LOGIN_SUCCESS, LOGIN_FAILURE, MFA_ENABLED, etc.
+  severity    String   @default("INFO") // INFO | WARNING | CRITICAL
+  description String
+  ipAddress   String?
+  userAgent   String?
+  metadata    String?  // JSON string for extra event data
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@schema("iam")
+}
+
+// ─── PASSWORD HISTORY ────────────────────────────────────────
+
+model PasswordHistory {
+  id           String   @id @default(cuid())
+  userId       String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("iam")
+}
+
+// ─── OAUTH 2.0 / OIDC ───────────────────────────────────────
+
+model OAuthApp {
+  id            String   @id @default(cuid())
+  name          String
+  clientId      String   @unique
+  clientSecret  String
+  redirectUris  String   // JSON array
+  allowedScopes String   // JSON array
+  description   String?
+  logoUrl       String?
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  createdBy User                    @relation("AppCreator", fields: [createdById], references: [id])
+  tokens    OAuthToken[]
+  codes     OAuthAuthorizationCode[]
+
+  @@schema("iam")
+}
+
+model OAuthToken {
+  id           String   @id @default(cuid())
+  accessToken  String   @unique
+  refreshToken String?  @unique
+  clientId     String
+  userId       String
+  scope        String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  app  OAuthApp @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("iam")
+}
+
+model OAuthAuthorizationCode {
+  id                  String   @id @default(cuid())
+  code                String   @unique
+  clientId            String
+  userId              String
+  redirectUri         String
+  scope               String
+  codeChallenge       String?
+  codeChallengeMethod String?
+  expiresAt           DateTime
+  used                Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  app  OAuthApp @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("iam")
+}
+
+// ─── SECURITY POLICY (SINGLETON) ─────────────────────────────
+
+model SecurityPolicy {
+  id                          String   @id @default("default")
+  minPasswordLength           Int      @default(8)
+  requireUppercase            Boolean  @default(true)
+  requireLowercase            Boolean  @default(true)
+  requireNumbers              Boolean  @default(true)
+  requireSpecialChars         Boolean  @default(true)
+  passwordExpiryDays          Int      @default(90)
+  passwordHistoryCount        Int      @default(5)
+  maxFailedAttempts           Int      @default(5)
+  lockoutDurationMinutes      Int      @default(30)
+  sessionIdleTimeoutMinutes   Int      @default(30)
+  sessionAbsoluteTimeoutHours Int      @default(24)
+  mfaPolicy                   String  @default("OPTIONAL") // OPTIONAL | REQUIRED_ALL | REQUIRED_ADMINS
+  ipAllowlist                 String   @default("[]") // JSON array
+  ipBlocklist                 String   @default("[]") // JSON array
+  updatedAt                   DateTime @updatedAt
+
+  @@schema("iam")
+}
