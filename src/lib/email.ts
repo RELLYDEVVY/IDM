@@ -14,7 +14,10 @@ export async function sendVerificationEmail(to: string, token: string) {
   }
 
   // Use the NEXT_PUBLIC_APP_URL if defined, otherwise fallback to localhost
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const defaultUrl = process.env.NODE_ENV === 'production' 
+    ? 'https://identitym.netlify.app' 
+    : 'http://localhost:3000';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || defaultUrl;
   const verificationLink = `${appUrl}/api/auth/verify-email?token=${token}`;
 
   const msg = {
